@@ -1,0 +1,68 @@
+work_dir: ./work_dir/ours/ctrgcn_mediapipe_joint
+
+# ======================
+# feeder
+# ======================
+feeder: feeders.feeder_ours_mediapipe.Feeder
+
+train_feeder_args:
+  # 這個會傳給 Feeder(data_path=...)
+  data_path: data/ours_dataset/pose_npy
+  # 這個會傳給 Feeder(label_path=...)
+  label_path: data/ours_dataset/pose_npy/labels.txt
+  # 我們剛剛切出來的 train split
+  split_path: data/ours_dataset/splits/train_list.txt
+
+  debug: False
+  random_choose: False
+  random_shift: True      # 想要隨機對齊 clip 開頭可以設 True，不想就改 False
+  random_move: False
+  window_size: 120       # 2 秒 * 60 fps = 120 frames
+  normalization: False    # 先關掉，有需要再開
+  repeat: 1               # 數據小的話，之後可以設大一點讓一個 epoch 看多輪
+
+test_feeder_args:
+  data_path: data/ours_dataset/pose_npy
+  label_path: data/ours_dataset/pose_npy/labels.txt
+  split_path: data/ours_dataset/splits/val_list.txt
+
+  debug: False
+  random_choose: False
+  random_shift: False     # 測試通常固定中心裁切或固定長度
+  random_move: False
+  window_size: 120
+  normalization: False
+  repeat: 1
+
+# ======================
+# model
+# ======================
+model: adventure_game_jetson.inference.model.ctrgcn.Model
+model_args:
+  # num_class: 7            # stand / jump / crouch / dodge_left / dodge_right / push / run_forward
+  num_class: 5            # stand / jump / crouch / push / run_forward
+  # num_class: 6            # stand / jump / crouch / push / run_forward / dance
+  num_point: 33           # Mediapipe Pose 有 33 個關節
+  num_person: 1           # 一個人
+  graph: adventure_game_jetson.inference.graph.mediapipe_pose.Graph
+  graph_args:
+    labeling_mode: 'spatial'
+
+# ======================
+# optim
+# ======================
+weight_decay: 0.0004
+base_lr: 0.01             # 你資料比較小，我幫你先調小一點，避免太躁
+lr_decay_rate: 0.1
+step: [35, 55]
+warm_up_epoch: 0
+
+# ======================
+# training
+# ======================
+device: [0]
+batch_size: 16       # 可以先設 32，比 64 更保險一點；看 GPU 再調
+test_batch_size: 10
+num_epoch: 25
+nesterov: True
+num_worker: 4       #自己加的，原本好像是32個

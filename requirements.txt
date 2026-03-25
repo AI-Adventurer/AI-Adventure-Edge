@@ -1,0 +1,10 @@
+# Core runtime dependencies for the Jetson replacement.
+# On Jetson, prefer a platform-compatible torch/OpenCV build if pip wheels are not available.
+numpy>=1.23
+opencv-python>=4.8
+Pillow>=10.0
+PyYAML>=6.0
+mediapipe>=0.10
+
+# Optional: install only if you want OpenAI-backed narration.
+# openai>=1.0

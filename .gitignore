@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+
+# Editor / OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Project-local data, logs, and weights
+data/
+logs/
+artifacts/
+*.onnx
+*.pt
+*.pth
+*.tflite
+models/ctrgcn_test_fp16.engine
+!models/
+!models/config.yaml
+!models/best.pt
+!models/ctrgcn_fp16.engine

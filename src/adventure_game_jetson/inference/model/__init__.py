@@ -1,0 +1,2 @@
+from .ctrgcn import Model
+

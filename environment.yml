@@ -1,0 +1,17 @@
+name: adventure_game_jetson
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip>=24
+  - setuptools>=68
+  - wheel
+  - numpy>=1.23
+  - opencv>=4.8
+  - pillow>=10.0
+  - pyyaml>=6.0
+  - pip:
+      - mediapipe>=0.10
+      - -e .
+      # Optional:
+      # - openai>=1.0
