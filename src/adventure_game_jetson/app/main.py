@@ -122,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--edge-video-answer-event", default="answer")
     parser.add_argument("--edge-video-candidate-event", default="candidate")
     parser.add_argument("--edge-video-response-event", default="response")
-    parser.add_argument("--edge-video-fps", type=float, default=0.0)
+    parser.add_argument("--edge-video-fps", type=float, default=15.0)
     parser.add_argument("--edge-video-width", type=int, default=640)
     parser.add_argument("--edge-video-height", type=int, default=480)
     parser.add_argument("--edge-video-ice-servers", default="stun:stun.l.google.com:19302")

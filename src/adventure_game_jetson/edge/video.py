@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,13 +23,13 @@ class LatestFrameBuffer:
         if frame.ndim != 3:
             return
         with self._lock:
-            self._latest_frame = np.ascontiguousarray(frame.copy())
+            self._latest_frame = (
+                frame if frame.flags.c_contiguous else np.ascontiguousarray(frame)
+            )
 
     def snapshot(self) -> np.ndarray | None:
         with self._lock:
-            if self._latest_frame is None:
-                return None
-            return np.ascontiguousarray(self._latest_frame.copy())
+            return self._latest_frame
 
 
 def _resolve_video_size(
@@ -140,6 +141,8 @@ class WebRTCVideoStreamer:
         self._renegotiation_task: asyncio.Task | None = None
         self._pending_remote_candidates: list[dict[str, Any]] = []
         self._remote_description_applied = False
+        self._submit_interval_sec = 1.0 / max(1.0, float(self.config.fps))
+        self._last_submit_at = 0.0
 
     @staticmethod
     def _normalize_url(url: str) -> str:
@@ -167,6 +170,10 @@ class WebRTCVideoStreamer:
             raise RuntimeError("Could not start WebRTC video streamer") from self._start_error
 
     def submit_frame(self, frame_bgr: np.ndarray | None) -> None:
+        now = time.monotonic()
+        if (now - self._last_submit_at) < self._submit_interval_sec:
+            return
+        self._last_submit_at = now
         self.frame_buffer.update(frame_bgr)
 
     def close(self) -> None:
