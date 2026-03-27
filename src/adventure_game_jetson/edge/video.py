@@ -118,6 +118,7 @@ class WebRTCVideoConfig:
     offer_event: str = "offer"
     answer_event: str = "answer"
     candidate_event: str = "candidate"
+    request_offer_event: str = "request_offer"
     response_event: str = "response"
     fps: float = 15.0
     width: int = 0
@@ -260,6 +261,17 @@ class WebRTCVideoStreamer:
                 await self._apply_remote_candidate(data or {})
             except Exception as exc:
                 self._log(f"candidate_error={exc}")
+
+        @self._sio.on(self.config.request_offer_event, namespace=namespace)
+        async def _on_request_offer(data):
+            try:
+                source = str((data or {}).get("source", "")).strip()
+                if source and source == self.config.source_id:
+                    return
+                self._log(f"request_offer source={source or '-'}")
+                await self._safe_negotiate("peer_request_offer")
+            except Exception as exc:
+                self._log(f"request_offer_error={exc}")
 
         await self._sio.connect(
             url,
@@ -471,6 +483,7 @@ def build_edge_video_streamer(
     offer_event: str = "offer",
     answer_event: str = "answer",
     candidate_event: str = "candidate",
+    request_offer_event: str = "request_offer",
     response_event: str = "response",
     fps: float = 15.0,
     width: int = 0,
@@ -487,6 +500,7 @@ def build_edge_video_streamer(
         offer_event=offer_event,
         answer_event=answer_event,
         candidate_event=candidate_event,
+        request_offer_event=request_offer_event,
         response_event=response_event,
         fps=fps,
         width=width,

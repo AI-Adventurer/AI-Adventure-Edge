@@ -263,8 +263,8 @@ python -m adventure_game_jetson.app \
 
 `--perf-mode balanced` 目前會自動套用：
 
-- `--width 480`
-- `--height 360`
+- `--width 640`
+- `--height 480`
 - `--mp-input-width 256`
 - `--mp-input-height 192`
 - `--pose-every-n-frames 2`
@@ -272,8 +272,8 @@ python -m adventure_game_jetson.app \
 - `--smooth-k 3`
 - `--edge-publish-history-size 8`
 - `--edge-video-fps 12`
-- `--edge-video-width 480`
-- `--edge-video-height 360`
+- `--edge-video-width 640`
+- `--edge-video-height 480`
 
 如果你另外手動指定其中某個參數，手動值會優先，不會被 preset 蓋掉。
 

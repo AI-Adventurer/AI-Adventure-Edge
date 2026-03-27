@@ -15,8 +15,8 @@ DEFAULT_EDGE_SERVER_URL = os.environ.get("ADVENTURE_GAME_EDGE_SERVER_URL", "http
 PERF_MODE_PRESETS: dict[str, dict[str, int | float]] = {
     "off": {},
     "balanced": {
-        "width": 480,
-        "height": 360,
+        "width": 640,
+        "height": 480,
         "fps": 30.0,
         "mp_input_width": 256,
         "mp_input_height": 192,
@@ -25,8 +25,8 @@ PERF_MODE_PRESETS: dict[str, dict[str, int | float]] = {
         "smooth_k": 3,
         "edge_publish_history_size": 8,
         "edge_video_fps": 12.0,
-        "edge_video_width": 480,
-        "edge_video_height": 360,
+        "edge_video_width": 640,
+        "edge_video_height": 480,
     },
 }
 
@@ -413,11 +413,11 @@ def run_edge(args: argparse.Namespace) -> None:
 
     try:
         while True:
-            frame_started = time.perf_counter()
             now = time.monotonic()
             if now < next_frame_at:
                 time.sleep(next_frame_at - now)
             next_frame_at = max(next_frame_at + frame_period, time.monotonic())
+            frame_started = time.perf_counter()
 
             capture_started = time.perf_counter()
             frame = video_source.read()
