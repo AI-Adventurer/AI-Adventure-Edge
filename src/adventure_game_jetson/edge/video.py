@@ -141,6 +141,7 @@ class WebRTCVideoStreamer:
         self._renegotiation_task: asyncio.Task | None = None
         self._pending_remote_candidates: list[dict[str, Any]] = []
         self._remote_description_applied = False
+        self._peer_ready = False
         self._submit_interval_sec = 1.0 / max(1.0, float(self.config.fps))
         self._last_submit_at = 0.0
 
@@ -170,6 +171,8 @@ class WebRTCVideoStreamer:
             raise RuntimeError("Could not start WebRTC video streamer") from self._start_error
 
     def submit_frame(self, frame_bgr: np.ndarray | None) -> None:
+        if not self._peer_ready:
+            return
         now = time.monotonic()
         if (now - self._last_submit_at) < self._submit_interval_sec:
             return
@@ -231,6 +234,7 @@ class WebRTCVideoStreamer:
 
         @self._sio.on("disconnect", namespace=namespace)
         async def _on_disconnect():
+            self._peer_ready = False
             self._log(f"disconnected namespace={namespace}")
 
         @self._sio.on("connect_error", namespace=namespace)
@@ -285,6 +289,7 @@ class WebRTCVideoStreamer:
             await self._pc.close()
         self._pending_remote_candidates = []
         self._remote_description_applied = False
+        self._peer_ready = False
 
         ice_servers = [
             self._rtc_ice_server(urls=url)
@@ -311,6 +316,7 @@ class WebRTCVideoStreamer:
             state = pc.connectionState
             self._log(f"pc_state={state}")
             if state in {"failed", "closed"}:
+                self._peer_ready = False
                 self._schedule_renegotiation(f"pc_state_{state}")
 
         @pc.on("iceconnectionstatechange")
@@ -320,6 +326,7 @@ class WebRTCVideoStreamer:
             state = pc.iceConnectionState
             self._log(f"ice_state={state}")
             if state == "failed":
+                self._peer_ready = False
                 self._schedule_renegotiation("ice_failed")
 
         @pc.on("icegatheringstatechange")
@@ -402,6 +409,7 @@ class WebRTCVideoStreamer:
             self._rtc_session_description(sdp=sdp, type=answer_type)
         )
         self._remote_description_applied = True
+        self._peer_ready = True
         self._log("answer_applied")
         await self._flush_pending_remote_candidates()
 

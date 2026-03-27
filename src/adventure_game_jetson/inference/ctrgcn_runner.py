@@ -6,11 +6,23 @@ from typing import Deque
 
 import numpy as np
 
-from .backends import ActionModelBackend, load_model_from_config
+from .backends import ActionModelBackend
 
 
-def buffer_to_window(buffer: list[np.ndarray]) -> np.ndarray:
-    return np.stack(buffer, axis=0).astype(np.float32)
+def buffer_to_window(
+    buffer: Deque[np.ndarray],
+    out: np.ndarray | None = None,
+) -> np.ndarray:
+    if not buffer:
+        return np.empty((0, 0, 0), dtype=np.float32)
+
+    first_frame = np.asarray(buffer[0], dtype=np.float32)
+    window_shape = (len(buffer),) + first_frame.shape
+    if out is None or out.shape != window_shape:
+        out = np.empty(window_shape, dtype=np.float32)
+    for idx, frame in enumerate(buffer):
+        out[idx] = frame
+    return out
 
 
 def softmax_np(logits: np.ndarray) -> np.ndarray:
@@ -49,6 +61,7 @@ class CTRGCNRunner:
 
         self.buf: Deque[np.ndarray] = deque(maxlen=self.window_size)
         self.pred_hist: Deque[int] = deque(maxlen=self.smooth_k)
+        self._window_cache: np.ndarray | None = None
 
         self.frame_idx = 0
         self.last_action = "Warming up..."
@@ -58,6 +71,7 @@ class CTRGCNRunner:
         self.buf.clear()
         self.pred_hist.clear()
         self.frame_idx = 0
+        self._window_cache = None
         self.last_action = "Warming up..."
         self.last_score = 0.0
 
@@ -74,7 +88,8 @@ class CTRGCNRunner:
         if (self.frame_idx % self.stride) != 0:
             return InferenceResult(ready=False)
 
-        window = buffer_to_window(list(self.buf))
+        window = buffer_to_window(self.buf, self._window_cache)
+        self._window_cache = window
         logits = np.asarray(self.backend.infer(window), dtype=np.float32).reshape(-1)
         probs = softmax_np(logits)
         pred_idx = int(np.argmax(probs))

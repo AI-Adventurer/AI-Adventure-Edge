@@ -84,6 +84,7 @@ class ActionRecognizer:
         self._prev_skeleton: np.ndarray | None = None
         self._last_skeleton = np.zeros((33, 3), dtype=np.float32)
         self._raw_history: Deque[np.ndarray] = deque(maxlen=window_size)
+        self._serialized_history: Deque[list[list[float]]] = deque(maxlen=window_size)
         self._zero_scores = {label: 0.0 for label in self.action_labels}
         self._last_prediction = ActionPrediction(scores=dict(self._zero_scores))
         self._frame_counter = 0
@@ -93,6 +94,7 @@ class ActionRecognizer:
         self._prev_skeleton = None
         self._last_skeleton = np.zeros((33, 3), dtype=np.float32)
         self._raw_history.clear()
+        self._serialized_history.clear()
         self._last_prediction = ActionPrediction(scores=dict(self._zero_scores))
         self._frame_counter = 0
 
@@ -115,8 +117,15 @@ class ActionRecognizer:
             return np.zeros((0, 33, 3), dtype=np.float32)
         return np.stack(list(self._raw_history), axis=0).astype(np.float32)
 
+    def current_serialized_skeleton_sequence(self) -> list[list[list[float]]]:
+        return list(self._serialized_history)
+
     def _record_raw_skeleton(self, skeleton: np.ndarray) -> None:
-        self._raw_history.append(np.array(skeleton, dtype=np.float32, copy=True))
+        frame = np.array(skeleton, dtype=np.float32, copy=True)
+        self._raw_history.append(frame)
+        self._serialized_history.append(
+            np.round(frame, decimals=6).tolist()
+        )
 
     def _build_score_map(self, probabilities: np.ndarray | None) -> dict[str, float]:
         scores = dict(self._zero_scores)

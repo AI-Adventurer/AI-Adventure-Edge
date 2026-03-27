@@ -145,7 +145,8 @@ class EdgePacketBuilder:
         timestamp: float,
         frame: np.ndarray | None,
         skeleton: np.ndarray,
-        skeleton_sequence: np.ndarray,
+        skeleton_sequence: np.ndarray | None,
+        serialized_skeleton_sequence: list[list[list[float]]] | None = None,
         prediction: ActionPrediction | None,
         timings: RecognizerTimings,
         capture_ms: float,
@@ -156,6 +157,25 @@ class EdgePacketBuilder:
         preview_packet = self._build_preview_packet(frame_id, frame, skeleton)
         stable_action = prediction.action if prediction is not None else ""
         confidence = float(prediction.confidence) if prediction is not None else 0.0
+        sequence_frames = (
+            serialized_skeleton_sequence
+            if serialized_skeleton_sequence is not None
+            else _rounded_array(skeleton_sequence if skeleton_sequence is not None else np.zeros((0, 0, 0)))
+        )
+        if sequence_frames:
+            sequence_shape = [
+                len(sequence_frames),
+                len(sequence_frames[0]),
+                len(sequence_frames[0][0]) if sequence_frames[0] else 0,
+            ]
+        elif skeleton_sequence is not None and skeleton_sequence.ndim == 3:
+            sequence_shape = [
+                int(skeleton_sequence.shape[0]),
+                int(skeleton_sequence.shape[1]),
+                int(skeleton_sequence.shape[2]),
+            ]
+        else:
+            sequence_shape = [0, int(skeleton.shape[0]), int(skeleton.shape[1])]
 
         packet = {
             "timestamp": round(float(timestamp), 6),
@@ -176,12 +196,8 @@ class EdgePacketBuilder:
             },
             "skeleton_sequence": {
                 "layout": self.layout,
-                "shape": [
-                    int(skeleton_sequence.shape[0]),
-                    int(skeleton_sequence.shape[1]),
-                    int(skeleton_sequence.shape[2]),
-                ],
-                "frames": _rounded_array(skeleton_sequence),
+                "shape": sequence_shape,
+                "frames": sequence_frames,
             },
             "timings_ms": {
                 "capture": round(float(capture_ms), 3),

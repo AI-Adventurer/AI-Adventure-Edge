@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 
 class EdgePublisher(Protocol):
@@ -34,6 +35,50 @@ class JsonlPublisher:
             self._stream.close()
 
 
+class _LatestPacketDispatcher:
+    def __init__(self, send_packet: Callable[[dict[str, Any]], None]) -> None:
+        self._send_packet = send_packet
+        self._condition = threading.Condition()
+        self._pending_packet: dict[str, Any] | None = None
+        self._closing = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="edge-socketio-publisher",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def submit(self, packet: dict[str, Any]) -> None:
+        with self._condition:
+            if self._closing:
+                raise RuntimeError("Socket.IO publisher is closed")
+            self._pending_packet = dict(packet)
+            self._condition.notify()
+
+    def close(self) -> None:
+        with self._condition:
+            self._closing = True
+            self._condition.notify_all()
+        if threading.current_thread() is not self._thread:
+            self._thread.join()
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while self._pending_packet is None and not self._closing:
+                    self._condition.wait()
+                if self._pending_packet is None:
+                    return
+                packet = self._pending_packet
+                self._pending_packet = None
+            try:
+                self._send_packet(packet)
+            except Exception:
+                # Best effort: keep the most recent packet moving rather than
+                # blocking the edge loop on transient Socket.IO failures.
+                pass
+
+
 class SocketIOPublisher:
     def __init__(
         self,
@@ -51,6 +96,7 @@ class SocketIOPublisher:
         self.transports = [item for item in (transports or ["polling", "websocket"]) if item]
         self.timeout_sec = float(timeout_sec)
         self._client = None
+        self._dispatcher = _LatestPacketDispatcher(self._send_packet)
 
     @staticmethod
     def _normalize_url(url: str) -> str:
@@ -89,7 +135,14 @@ class SocketIOPublisher:
         self._client = client
         return client
 
-    def publish(self, packet: dict[str, Any]) -> None:
+    def _disconnect_client(self) -> None:
+        if self._client is not None:
+            try:
+                self._client.disconnect()
+            finally:
+                self._client = None
+
+    def _send_packet(self, packet: dict[str, Any]) -> None:
         last_error: Exception | None = None
         for _attempt in range(2):
             try:
@@ -98,19 +151,19 @@ class SocketIOPublisher:
                 return
             except Exception as exc:
                 last_error = exc
-                self.close()
+                self._disconnect_client()
         raise RuntimeError(
             "Could not publish edge packet to Socket.IO "
             f"{self.url} namespace={self.namespace!r} event={self.event!r} "
             f"path={self.socketio_path!r} transports={self.transports!r}"
         ) from last_error
 
+    def publish(self, packet: dict[str, Any]) -> None:
+        self._dispatcher.submit(packet)
+
     def close(self) -> None:
-        if self._client is not None:
-            try:
-                self._client.disconnect()
-            finally:
-                self._client = None
+        self._dispatcher.close()
+        self._disconnect_client()
 
 
 class MultiPublisher:
