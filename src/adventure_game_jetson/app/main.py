@@ -12,6 +12,23 @@ from adventure_game_jetson.inference import FrameTimings, RollingProfiler
 os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
 DEFAULT_SOURCE_ID = socket.gethostname()
 DEFAULT_EDGE_SERVER_URL = os.environ.get("ADVENTURE_GAME_EDGE_SERVER_URL", "http://192.168.50.174:8000")
+PERF_MODE_PRESETS: dict[str, dict[str, int | float]] = {
+    "off": {},
+    "balanced": {
+        "width": 480,
+        "height": 360,
+        "fps": 30.0,
+        "mp_input_width": 256,
+        "mp_input_height": 192,
+        "pose_every_n_frames": 2,
+        "stride": 2,
+        "smooth_k": 3,
+        "edge_publish_history_size": 8,
+        "edge_video_fps": 12.0,
+        "edge_video_width": 480,
+        "edge_video_height": 360,
+    },
+}
 
 
 def _iter_model_dir_candidates() -> list[Path]:
@@ -68,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--camera-pipeline", default="")
     parser.add_argument("--video-path", default="")
+    parser.add_argument("--perf-mode", choices=tuple(PERF_MODE_PRESETS), default="off")
     parser.add_argument("--fps", type=float, default=30.0)
     parser.add_argument("--loop", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True)
@@ -109,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--source-id", default=DEFAULT_SOURCE_ID)
     parser.add_argument("--edge-output-path", default="")
+    parser.add_argument("--edge-publish-history-size", type=int, default=0)
     parser.add_argument("--edge-sio-url", default=DEFAULT_EDGE_SERVER_URL)
     parser.add_argument("--edge-sio-event", default="frame")
     parser.add_argument("--edge-sio-namespace", default="/edge/frames")
@@ -133,6 +152,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--edge-preview-every-n-frames", type=int, default=3)
     parser.add_argument("--edge-preview-overlay", action=argparse.BooleanOptionalAction, default=False)
     return parser
+
+
+def _collect_explicit_dests(parser: argparse.ArgumentParser, argv: list[str]) -> set[str]:
+    option_to_dest: dict[str, str] = {}
+    for action in parser._actions:
+        for option in action.option_strings:
+            option_to_dest[option] = action.dest
+
+    explicit_dests: set[str] = set()
+    for token in argv:
+        if not token.startswith("-") or token == "-":
+            continue
+        option = token.split("=", 1)[0]
+        dest = option_to_dest.get(option)
+        if dest is not None:
+            explicit_dests.add(dest)
+    return explicit_dests
+
+
+def _apply_perf_mode(args: argparse.Namespace, explicit_dests: set[str]) -> None:
+    for dest, value in PERF_MODE_PRESETS.get(args.perf_mode, {}).items():
+        if dest in explicit_dests:
+            continue
+        setattr(args, dest, value)
 
 
 def _resolve_device(requested_device: str) -> str:
@@ -190,6 +233,7 @@ def run_standalone(args: argparse.Namespace) -> None:
     print(
         "[adventure-game] "
         f"mode={args.mode} "
+        f"perf_mode={args.perf_mode} "
         f"pose_backend={args.pose_backend} "
         f"action_backend={recognizer.action_backend} "
         f"action_device={recognizer.action_device} "
@@ -346,6 +390,7 @@ def run_edge(args: argparse.Namespace) -> None:
     print(
         "[adventure-game] "
         f"mode={args.mode} "
+        f"perf_mode={args.perf_mode} "
         f"pose_backend={args.pose_backend} "
         f"action_backend={recognizer.action_backend} "
         f"action_device={recognizer.action_device} "
@@ -364,9 +409,11 @@ def run_edge(args: argparse.Namespace) -> None:
     next_frame_at = time.monotonic()
     frame_id = 0
     last_prediction = recognizer.latest_prediction()
+    profiler = RollingProfiler(report_every=args.profile_every) if args.profile else None
 
     try:
         while True:
+            frame_started = time.perf_counter()
             now = time.monotonic()
             if now < next_frame_at:
                 time.sleep(next_frame_at - now)
@@ -395,7 +442,10 @@ def run_edge(args: argparse.Namespace) -> None:
                 frame=frame,
                 skeleton=skeleton,
                 skeleton_sequence=None,
-                serialized_skeleton_sequence=recognizer.current_serialized_skeleton_sequence(),
+                serialized_pose=recognizer.current_serialized_pose(),
+                serialized_skeleton_sequence=recognizer.current_serialized_skeleton_sequence(
+                    args.edge_publish_history_size
+                ),
                 prediction=last_prediction,
                 timings=recognizer_timings,
                 capture_ms=capture_ms,
@@ -404,6 +454,17 @@ def run_edge(args: argparse.Namespace) -> None:
                 action_device=recognizer.action_device,
             )
             publisher.publish(packet)
+
+            if profiler is not None:
+                profiler.update(
+                    FrameTimings(
+                        capture_ms=capture_ms,
+                        pose_ms=recognizer_timings.pose_ms,
+                        preprocess_ms=recognizer_timings.preprocess_ms,
+                        action_ms=recognizer_timings.action_ms,
+                        total_ms=(time.perf_counter() - frame_started) * 1000.0,
+                    )
+                )
 
             if args.max_frames > 0 and frame_id >= args.max_frames:
                 break
@@ -419,7 +480,10 @@ def run_edge(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    argv = sys.argv[1:]
+    args = parser.parse_args(argv)
+    _apply_perf_mode(args, _collect_explicit_dests(parser, argv))
     if args.mode == "edge":
         run_edge(args)
         return

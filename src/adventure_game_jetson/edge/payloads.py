@@ -146,6 +146,7 @@ class EdgePacketBuilder:
         frame: np.ndarray | None,
         skeleton: np.ndarray,
         skeleton_sequence: np.ndarray | None,
+        serialized_pose: list[list[float]] | None = None,
         serialized_skeleton_sequence: list[list[list[float]]] | None = None,
         prediction: ActionPrediction | None,
         timings: RecognizerTimings,
@@ -192,7 +193,11 @@ class EdgePacketBuilder:
             "pose": {
                 "layout": self.layout,
                 "shape": [int(skeleton.shape[0]), int(skeleton.shape[1])],
-                "points": _rounded_array(skeleton),
+                "points": (
+                    serialized_pose
+                    if serialized_pose is not None
+                    else _rounded_array(skeleton)
+                ),
             },
             "skeleton_sequence": {
                 "layout": self.layout,

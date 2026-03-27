@@ -252,6 +252,44 @@ python -m adventure_game_jetson.app \
 
 這組參數對應遠端後端的 `@socketio.on("frame", namespace="/edge/frames")`。
 
+如果你想直接套用 Jetson 比較平衡的效能設定，也可以改成：
+
+```bash
+python -m adventure_game_jetson.app \
+  --mode edge \
+  --source-id jetson-nano-01 \
+  --perf-mode balanced
+```
+
+`--perf-mode balanced` 目前會自動套用：
+
+- `--width 480`
+- `--height 360`
+- `--mp-input-width 256`
+- `--mp-input-height 192`
+- `--pose-every-n-frames 2`
+- `--stride 2`
+- `--smooth-k 3`
+- `--edge-publish-history-size 8`
+- `--edge-video-fps 12`
+- `--edge-video-width 480`
+- `--edge-video-height 360`
+
+如果你另外手動指定其中某個參數，手動值會優先，不會被 preset 蓋掉。
+
+如果你想直接看 `edge` 模式的 FPS / 分段耗時，也可以加：
+
+```bash
+python -m adventure_game_jetson.app \
+  --mode edge \
+  --source-id jetson-nano-01 \
+  --perf-mode balanced \
+  --profile \
+  --profile-every 60
+```
+
+這會定期輸出 `capture / pose / preprocess / action / total / fps`，比較容易知道瓶頸是在相機、MediaPipe、CTR-GCN 還是整體主迴圈。
+
 如果後端用了不同 namespace，再改這個值：
 
 ```bash
