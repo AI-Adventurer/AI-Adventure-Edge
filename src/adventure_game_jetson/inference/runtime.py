@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 import time
 from time import perf_counter
+from typing import Deque
 
 import numpy as np
 
@@ -14,9 +16,10 @@ from .profiling import RecognizerTimings
 
 @dataclass(slots=True)
 class ActionPrediction:
-    action: str
-    confidence: float
-    produced_at: float
+    action: str = ""
+    confidence: float = 0.0
+    produced_at: float = 0.0
+    scores: dict[str, float] = field(default_factory=dict)
 
 
 class ActionRecognizer:
@@ -67,6 +70,7 @@ class ActionRecognizer:
             stride=stride,
             smooth_k=smooth_k,
         )
+        self.sequence_layout = "mediapipe_pose_33"
         if self.pose_backend != "mediapipe":
             raise ValueError(f"Unsupported pose backend: {pose_backend}")
         self.pose_extractor = MediaPipePoseExtractor(
@@ -79,17 +83,49 @@ class ActionRecognizer:
         )
         self._prev_skeleton: np.ndarray | None = None
         self._last_skeleton = np.zeros((33, 3), dtype=np.float32)
+        self._raw_history: Deque[np.ndarray] = deque(maxlen=window_size)
+        self._zero_scores = {label: 0.0 for label in self.action_labels}
+        self._last_prediction = ActionPrediction(scores=dict(self._zero_scores))
         self._frame_counter = 0
 
     def reset(self) -> None:
         self.runner.reset()
         self._prev_skeleton = None
         self._last_skeleton = np.zeros((33, 3), dtype=np.float32)
+        self._raw_history.clear()
+        self._last_prediction = ActionPrediction(scores=dict(self._zero_scores))
         self._frame_counter = 0
 
     def close(self) -> None:
         self.runner.close()
         self.pose_extractor.close()
+
+    def latest_prediction(self) -> ActionPrediction | None:
+        if not self._last_prediction.action:
+            return None
+        return ActionPrediction(
+            action=self._last_prediction.action,
+            confidence=self._last_prediction.confidence,
+            produced_at=self._last_prediction.produced_at,
+            scores=dict(self._last_prediction.scores),
+        )
+
+    def current_skeleton_sequence(self) -> np.ndarray:
+        if not self._raw_history:
+            return np.zeros((0, 33, 3), dtype=np.float32)
+        return np.stack(list(self._raw_history), axis=0).astype(np.float32)
+
+    def _record_raw_skeleton(self, skeleton: np.ndarray) -> None:
+        self._raw_history.append(np.array(skeleton, dtype=np.float32, copy=True))
+
+    def _build_score_map(self, probabilities: np.ndarray | None) -> dict[str, float]:
+        scores = dict(self._zero_scores)
+        if probabilities is None:
+            return scores
+        flat = np.asarray(probabilities, dtype=np.float32).reshape(-1)
+        for idx, label in enumerate(self.action_labels[: len(flat)]):
+            scores[label] = float(flat[idx])
+        return scores
 
     def _preprocess_skeleton(self, skeleton: np.ndarray) -> np.ndarray | None:
         if skeleton is None:
@@ -141,15 +177,14 @@ class ActionRecognizer:
             return None, preprocess_ms, action_ms
 
         ts = float(produced_at) if produced_at is not None else time.time()
-        return (
-            ActionPrediction(
-                action=runner_result.action,
-                confidence=float(runner_result.score),
-                produced_at=ts,
-            ),
-            preprocess_ms,
-            action_ms,
+        prediction = ActionPrediction(
+            action=runner_result.action,
+            confidence=float(runner_result.score),
+            produced_at=ts,
+            scores=self._build_score_map(runner_result.probabilities),
         )
+        self._last_prediction = prediction
+        return prediction, preprocess_ms, action_ms
 
     def process_frame(
         self,
@@ -172,6 +207,8 @@ class ActionRecognizer:
             preprocess_ms = 0.0
             action_ms = 0.0
             prediction = None
+
+        self._record_raw_skeleton(skeleton)
 
         timings = RecognizerTimings(
             pose_ms=pose_ms,

@@ -8,3 +8,11 @@ mediapipe>=0.10
 
 # Optional: install only if you want OpenAI-backed narration.
 # openai>=1.0
+
+# Optional: install only if you want Socket.IO publishing in edge mode.
+# python-socketio[client]>=5.11
+
+# Optional: install only if you want WebRTC video streaming in edge mode.
+# python-socketio[client]>=5.11
+# aiohttp>=3.9
+# aiortc>=1.9

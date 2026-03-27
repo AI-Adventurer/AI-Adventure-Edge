@@ -1,13 +1,40 @@
 # AI Adventure Edge
 
-這是把原本 ROS 版體感冒險遊戲移植成非 ROS、可直接在 Jetson 上執行的版本。
+這個 repo 現在有兩種使用方式：
+
+- `edge` 模式：Jetson Nano 只負責相機讀取、MediaPipe Pose、CTR-GCN 動作辨識，然後把骨架 / 動作 / 可選預覽影像送到遠端主機
+- `standalone` 模式：保留原本單機版流程，讓 Jetson 本地直接跑 `GameEngine` 與 OpenCV 視窗，方便除錯或 demo
+
+如果你的正式部署是「Jetson 做辨識，另一台電腦做 game manager 與 UI」，請優先使用 `edge` 模式。
+
+如果遠端主機是 `/home/jetson/workspace/AI-Adventurer-APP-main` 這個後端，Jetson 端目前應該對接：
+
+- Socket.IO path: `socket.io`
+- namespace: `/edge/frames`
+- event: `frame`
+- 建議 transports: `polling,websocket`
+
+如果你要把即時畫面也送到遠端的 `/edge/video`：
+
+- Socket.IO path: `socket.io`
+- namespace: `/edge/video`
+- signaling events: `offer` / `answer` / `candidate`
+- Jetson 端現在已支援用 WebRTC sender 透過這組 signaling 送出 video track
+
+另外要注意：
+
+- 這個遠端後端目前真正 ingest 的核心欄位是 `timestamp`、`source`、`frame_id`、`action_scores`、`stable_action`、`confidence`、`skeleton_sequence`
+- Jetson 這邊額外送出的 `pose`、`timings_ms`、`runtime`、`preview_frame` 目前不會讓它壞掉，但也還沒有被那個後端的 game logic / frontend 正式消費
+- `preview_frame` 是附在 frame payload 裡的縮圖；如果你要正式即時畫面，請改走 `--edge-video-url ...` 的 WebRTC 視訊通道
 
 目前專案包含：
 
-- OpenCV 相機輸入與遊戲 UI
+- OpenCV 相機輸入
 - MediaPipe Pose 骨架擷取
 - CTR-GCN 動作辨識
-- 純 Python 遊戲狀態機
+- Edge packet 輸出（NDJSON / optional Socket.IO）
+- WebRTC video sender（optional）
+- 純 Python 遊戲狀態機與本地 OpenCV UI（僅 `standalone` 模式使用）
 - Jetson 可用的 PyTorch GPU / TensorRT 工作流
 
 ## 名稱說明
@@ -25,17 +52,67 @@ python -m adventure_game_jetson.app
 adventure-game
 ```
 
+## 建議部署架構
+
+正式部署建議拆成兩台機器：
+
+```text
+Jetson Nano
+  ├─ Camera capture
+  ├─ MediaPipe Pose
+  ├─ CTR-GCN inference
+  └─ Edge packet output
+         ↓
+Remote Host
+  ├─ Game Manager / 狀態機
+  ├─ UI / 視窗顯示
+  ├─ 規則判定
+  └─ 狀態同步 / 後端服務
+```
+
+責任分工：
+
+- Jetson Nano：相機讀取、骨架擷取、CTR-GCN 推論、輸出 raw pose / action scores / optional preview image
+- Remote Host：遊戲規則、劇情、視窗 UI、玩家狀態、網頁或桌面端畫面
+
+如果你要看傳輸 payload，請直接看 [Jetson-Nano-API-Documentation.md](/home/jetson/workspace/AI_Adventure_Edge/Jetson-Nano-API-Documentation.md)。
+
+## 執行模式
+
+### 1. `edge`
+
+這是目前推薦的模式。
+
+- 不建立本地 `GameEngine`
+- 不開 Jetson 本地 OpenCV 視窗
+- 每幀輸出：
+  - `pose`
+  - `skeleton_sequence`
+  - `action_scores`
+  - `stable_action`
+  - optional `preview_frame`
+
+### 2. `standalone`
+
+這是保留給本地除錯 / demo 的模式。
+
+- Jetson 本地跑 `GameEngine`
+- Jetson 本地開 OpenCV 視窗
+- 用來驗證辨識和 UI 疊圖是否正常
+
 ## ROS 對應說明
 
 如果你原本是在找 ROS 版的 `game_manager_node`，這一版的核心邏輯已經拆成純 Python 類別，
 主要放在 [src/adventure_game_jetson/core/engine.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/core/engine.py) 的
 `GameEngine`。
 
+注意：`GameEngine` 現在只在 `standalone` 模式需要；如果你走 edge 部署，game manager 應該放到遠端主機。
+
 大致對應關係如下：
 
 - 原本的 `game_manager` 狀態機與流程控制 -> [src/adventure_game_jetson/core/engine.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/core/engine.py)
 - 劇情模板、事件資料、OpenAI 劇情生成 -> [src/adventure_game_jetson/core/story.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/core/story.py)
-- 主程式串接相機、辨識、遊戲狀態、UI -> [src/adventure_game_jetson/app/main.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/app/main.py)
+- 主程式串接相機、辨識、edge packet / 遊戲狀態 / UI -> [src/adventure_game_jetson/app/main.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/app/main.py)
 
 如果你想修改遊戲流程、關卡切換、成功失敗判定、血量分數規則，優先從
 [src/adventure_game_jetson/core/engine.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/core/engine.py)
@@ -52,15 +129,17 @@ adventure-game
   - `install_jetson_torch.sh`: 安裝 Jetson GPU torch wheel
   - `build_ctrgcn_engine.sh`: 從 `best.pt` 重建 TensorRT engine
 - `src/adventure_game_jetson/app/`
-  - CLI 入口與主迴圈
+  - CLI 入口與主迴圈（`standalone` / `edge`）
 - `src/adventure_game_jetson/capture/`
   - 相機 / 影片來源，支援 GStreamer 與一般 webcam
 - `src/adventure_game_jetson/core/`
-  - 遊戲狀態機、劇情、事件資料
+  - 遊戲狀態機、劇情、事件資料（`standalone` 用）
+- `src/adventure_game_jetson/edge/`
+  - Edge packet builder、NDJSON / Socket.IO publisher、WebRTC video sender
 - `src/adventure_game_jetson/inference/`
   - MediaPipe Pose、CTR-GCN、PyTorch / TensorRT backend、profiling
 - `src/adventure_game_jetson/ui/`
-  - OpenCV HUD、中文文字繪製、骨架 overlay
+  - OpenCV HUD、中文文字繪製、骨架 overlay（`standalone` 用）
 
 ## 執行流程
 
@@ -69,12 +148,16 @@ adventure-game
 1. `VideoSource` 讀取相機或影片 frame
 2. `ActionRecognizer` 用 MediaPipe 擷取 33 點骨架
 3. 骨架經過前處理後送進 CTR-GCN
-4. `GameEngine` 根據辨識結果推進遊戲狀態
-5. `GameRenderer` 把相機畫面、骨架、劇情、倒數、動作結果畫出來
+4. `edge` 模式：封裝成 edge packet，輸出到 stdout / file / Socket.IO
+5. `standalone` 模式：`GameEngine` 根據辨識結果推進遊戲狀態
+6. `standalone` 模式：`GameRenderer` 把相機畫面、骨架、劇情、倒數、動作結果畫出來
 
 關鍵檔案：
 
 - [src/adventure_game_jetson/app/main.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/app/main.py)
+- [src/adventure_game_jetson/edge/payloads.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/edge/payloads.py)
+- [src/adventure_game_jetson/edge/publishers.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/edge/publishers.py)
+- [src/adventure_game_jetson/edge/video.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/edge/video.py)
 - [src/adventure_game_jetson/inference/runtime.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/inference/runtime.py)
 - [src/adventure_game_jetson/core/engine.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/core/engine.py)
 - [src/adventure_game_jetson/ui/renderer.py](/home/jetson/workspace/AI_Adventure_Edge/src/adventure_game_jetson/ui/renderer.py)
@@ -111,6 +194,18 @@ pip install -e .
 pip install ".[openai]"
 ```
 
+如果你想讓 edge mode 直接把 JSON packet 發到 Socket.IO：
+
+```bash
+pip install ".[edge]"
+```
+
+如果你想讓 edge mode 再加上 WebRTC video：
+
+```bash
+pip install ".[edge,edge-video]"
+```
+
 ### 方式 B: venv
 
 ```bash
@@ -126,24 +221,104 @@ pip install -r requirements.txt
 
 ## 啟動方式
 
-### 最基本執行
+### Edge mode: 輸出到 stdout（NDJSON）
 
 ```bash
 cd /home/jetson/workspace/AI_Adventure_Edge
-python -m adventure_game_jetson.app
+python -m adventure_game_jetson.app --mode edge
 ```
 
-### 指定字型，避免中文字缺字
+這個模式不開本地視窗，預設把 JSON packet 逐行寫到 stdout。
+
+### Edge mode: 輸出到檔案
 
 ```bash
 python -m adventure_game_jetson.app \
+  --mode edge \
+  --edge-output-path /tmp/jetson_edge.jsonl
+```
+
+### Edge mode: 送到遠端 Socket.IO
+
+```bash
+python -m adventure_game_jetson.app \
+  --mode edge \
+  --source-id jetson-nano-01 \
+  --edge-sio-url http://192.168.50.174:8000 \
+  --edge-sio-namespace /edge/frames \
+  --edge-sio-event frame \
+  --edge-sio-transports polling,websocket
+```
+
+這組參數對應遠端後端的 `@socketio.on("frame", namespace="/edge/frames")`。
+
+如果後端用了不同 namespace，再改這個值：
+
+```bash
+--edge-sio-namespace /你的namespace
+```
+
+如果後端 event 名稱不是 `frame`，請改成後端 `@socketio.on(...)` 的事件名稱。
+
+### Edge mode: 同時夾帶 UI 用預覽影像
+
+```bash
+python -m adventure_game_jetson.app \
+  --mode edge \
+  --source-id jetson-nano-01 \
+  --edge-sio-url http://192.168.50.174:8000 \
+  --edge-sio-namespace /edge/frames \
+  --edge-sio-event frame \
+  --edge-sio-transports polling,websocket \
+  --edge-include-preview \
+  --edge-preview-width 640 \
+  --edge-preview-height 360 \
+  --edge-preview-every-n-frames 3 \
+  --edge-preview-overlay
+```
+
+這個做法是把縮圖塞進 `frame` payload，適合除錯或暫時過渡，不是正式的即時視訊通道。
+
+### Edge mode: 同時送骨架結果 + WebRTC video
+
+```bash
+python -m adventure_game_jetson.app \
+  --mode edge \
+  --source-id jetson-nano-01 \
+  --edge-sio-url http://192.168.50.174:8000 \
+  --edge-sio-namespace /edge/frames \
+  --edge-sio-event frame \
+  --edge-sio-transports polling,websocket \
+  --edge-video-url http://192.168.50.174:8000 \
+  --edge-video-namespace /edge/video \
+  --edge-video-path socket.io \
+  --edge-video-transports polling,websocket \
+  --edge-video-offer-event offer \
+  --edge-video-answer-event answer \
+  --edge-video-candidate-event candidate \
+  --edge-video-width 640 \
+  --edge-video-height 360
+```
+
+重點：
+
+- `--edge-video-url` 一設下去，就會啟動 Jetson 端的 WebRTC sender
+- 這條 video stream 會跟 CTR-GCN 共用同一支 camera，不會另外搶一次 `VideoCapture`
+- 如果遠端需要 STUN / TURN，可以用 `--edge-video-ice-servers` 傳逗號分隔的 server URL
+
+### Standalone mode: 最基本執行
+
+```bash
+python -m adventure_game_jetson.app \
+  --mode standalone \
   --font-path /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 ```
 
-### Jetson 比較推薦的效能設定
+### Standalone mode: Jetson 比較推薦的效能設定
 
 ```bash
 python -m adventure_game_jetson.app \
+  --mode standalone \
   --font-path /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
   --profile \
   --mp-model-complexity 0 \
@@ -158,6 +333,7 @@ python -m adventure_game_jetson.app \
 
 ```bash
 python -m adventure_game_jetson.app \
+  --mode standalone \
   --action-backend tensorrt \
   --action-engine /home/jetson/workspace/AI_Adventure_Edge/models/ctrgcn_fp16.engine
 ```
@@ -170,8 +346,8 @@ adventure-game
 
 結束方式：
 
-- 按 `q`
-- 或按 `Esc`
+- `edge` 模式：`Ctrl+C`
+- `standalone` 模式：按 `q` 或 `Esc`
 
 ## TensorRT 與 MediaPipe 說明
 

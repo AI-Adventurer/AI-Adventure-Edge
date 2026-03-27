@@ -20,6 +20,12 @@ dependencies = [
 
 [project.optional-dependencies]
 openai = ["openai>=1.0"]
+edge = ["python-socketio[client]>=5.11"]
+edge-video = [
+  "python-socketio[client]>=5.11",
+  "aiohttp>=3.9",
+  "aiortc>=1.9",
+]
 dev = [
   "pytest>=8.0",
   "ruff>=0.6",

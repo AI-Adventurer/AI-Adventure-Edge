@@ -29,6 +29,7 @@ class InferenceResult:
     score: float = 0.0
     pred_idx: int = -1
     vote_idx: int = -1
+    probabilities: np.ndarray | None = None
 
 
 class CTRGCNRunner:
@@ -96,4 +97,5 @@ class CTRGCNRunner:
             score=score,
             pred_idx=pred_idx,
             vote_idx=vote_idx,
+            probabilities=probs.copy(),
         )
