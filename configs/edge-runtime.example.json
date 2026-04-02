@@ -1,0 +1,21 @@
+{
+  "mode": "edge",
+  "source_id": "jetson-nano-01",
+  "config": "models/config.yaml",
+  "weights": "models/best.pt",
+  "action_backend": "auto",
+  "action_engine": "models/ctrgcn_fp16.engine",
+  "edge_sio_url": "http://192.168.100.166:8000",
+  "edge_sio_path": "socket.io",
+  "edge_sio_namespace": "/edge/frames",
+  "edge_sio_event": "frame",
+  "edge_sio_transports": ["polling", "websocket"],
+  "edge_video_url": "http://192.168.100.166:8000",
+  "edge_video_namespace": "/edge/video",
+  "edge_video_path": "socket.io",
+  "edge_video_transports": ["polling", "websocket"],
+  "edge_video_offer_event": "offer",
+  "edge_video_answer_event": "answer",
+  "edge_video_candidate_event": "candidate",
+  "edge_video_response_event": "response"
+}

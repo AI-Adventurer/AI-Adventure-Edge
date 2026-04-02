@@ -283,6 +283,7 @@ class Model(nn.Module):
         in_channels=3,
         drop_out=0,
         adaptive=True,
+        base_channel=8,
     ):
         super().__init__()
 
@@ -295,8 +296,6 @@ class Model(nn.Module):
         self.num_class = num_class
         self.num_point = num_point
         self.data_bn = nn.BatchNorm1d(num_person * in_channels * num_point)
-
-        base_channel = 8
 
         self.l1 = TCN_GCN_unit(in_channels, base_channel, A, residual=False, adaptive=adaptive)
         self.l2 = TCN_GCN_unit(base_channel, base_channel, A, adaptive=adaptive)

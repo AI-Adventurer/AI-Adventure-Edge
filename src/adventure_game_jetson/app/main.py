@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import sys
@@ -18,11 +19,8 @@ PERF_MODE_PRESETS: dict[str, dict[str, int | float]] = {
         "width": 640,
         "height": 480,
         "fps": 30.0,
-        "mp_input_width": 256,
-        "mp_input_height": 192,
-        "pose_every_n_frames": 2,
-        "stride": 2,
-        "smooth_k": 3,
+        "pose_every_n_frames": 3,
+        "stride": 4,
         "edge_publish_history_size": 8,
         "edge_video_fps": 12.0,
         "edge_video_width": 640,
@@ -75,12 +73,18 @@ def _find_default_model_file(filename: str) -> Path:
 DEFAULT_CONFIG = _find_default_model_file("config.yaml")
 DEFAULT_WEIGHTS = _find_default_model_file("best.pt")
 DEFAULT_TRT_ENGINE = _find_default_model_file("ctrgcn_fp16.engine")
+LIST_LIKE_CONFIG_KEYS = {
+    "edge_sio_transports",
+    "edge_video_transports",
+    "edge_video_ice_servers",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Standalone adventure game or headless Jetson edge inference node."
     )
+    parser.add_argument("--runtime-config", default="")
     parser.add_argument("--mode", choices=("standalone", "edge"), default="standalone")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--camera-pipeline", default="")
@@ -99,22 +103,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pose-backend", default="mediapipe")
     parser.add_argument("--action-backend", default="auto")
     parser.add_argument("--action-engine", default=str(DEFAULT_TRT_ENGINE))
-    parser.add_argument("--window-size", type=int, default=30)
-    parser.add_argument("--stride", type=int, default=1)
-    parser.add_argument("--smooth-k", type=int, default=5)
-    parser.add_argument("--pose-every-n-frames", type=int, default=1)
+    parser.add_argument("--window-size", type=int, default=30)  # v2: match training window
+    parser.add_argument("--stride", type=int, default=6)  # v3: more responsive transitions
+    parser.add_argument("--smooth-k", type=int, default=2)  # v3: minimal smoothing, v3 model is confident enough
+    parser.add_argument("--pose-every-n-frames", type=int, default=2)  # v3: skip alternate frames, halves MediaPipe CPU cost
     parser.add_argument("--scale-w", type=float, default=1.0)
     parser.add_argument("--scale-h", type=float, default=1.0)
     parser.add_argument("--centralize", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--interpolate-60fps", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--mp-model-complexity", type=int, default=0)
+    parser.add_argument("--interpolate-60fps", action=argparse.BooleanOptionalAction, default=False)  # v2: train at 30fps native
+    parser.add_argument("--mp-model-complexity", type=int, default=1)
     parser.add_argument("--mp-min-detection-confidence", type=float, default=0.5)
     parser.add_argument("--mp-min-tracking-confidence", type=float, default=0.5)
-    parser.add_argument("--mp-input-width", type=int, default=320)
-    parser.add_argument("--mp-input-height", type=int, default=240)
+    parser.add_argument("--mp-input-width", type=int, default=0)
+    parser.add_argument("--mp-input-height", type=int, default=0)
     parser.add_argument("--profile", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--profile-every", type=int, default=60)
-    parser.add_argument("--min-conf", type=float, default=0.6)
+    parser.add_argument("--min-conf", type=float, default=0.4)
     parser.add_argument("--hp-init", type=int, default=10)
     parser.add_argument("--story-duration", type=float, default=5.0)
     parser.add_argument("--prep-duration", type=float, default=2.0)
@@ -133,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--edge-sio-namespace", default="/edge/frames")
     parser.add_argument("--edge-sio-path", default="socket.io")
     parser.add_argument("--edge-sio-transports", default="polling,websocket")
-    parser.add_argument("--edge-video-url", default=DEFAULT_EDGE_SERVER_URL)
+    parser.add_argument("--edge-video-url", default="")
     parser.add_argument("--edge-video-namespace", default="/edge/video")
     parser.add_argument("--edge-video-path", default="socket.io")
     parser.add_argument("--edge-video-transports", default="polling,websocket")
@@ -169,6 +173,41 @@ def _collect_explicit_dests(parser: argparse.ArgumentParser, argv: list[str]) ->
         if dest is not None:
             explicit_dests.add(dest)
     return explicit_dests
+
+
+def _load_runtime_config(
+    parser: argparse.ArgumentParser,
+    config_path: str,
+) -> dict[str, object]:
+    path = Path(config_path).expanduser()
+    with path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    if not isinstance(payload, dict):
+        raise ValueError("runtime config must be a JSON object")
+
+    valid_dests = {
+        action.dest
+        for action in parser._actions
+        if action.dest not in {"help"}
+    }
+    loaded: dict[str, object] = {}
+    unknown_keys: list[str] = []
+    for raw_key, value in payload.items():
+        dest = str(raw_key).strip().replace("-", "_")
+        if dest not in valid_dests:
+            unknown_keys.append(str(raw_key))
+            continue
+        if dest in LIST_LIKE_CONFIG_KEYS and isinstance(value, list):
+            loaded[dest] = ",".join(str(item).strip() for item in value if str(item).strip())
+            continue
+        loaded[dest] = value
+
+    if unknown_keys:
+        unknown_text = ", ".join(sorted(unknown_keys))
+        raise ValueError(f"unknown runtime config keys: {unknown_text}")
+    loaded["runtime_config"] = str(path)
+    return loaded
 
 
 def _apply_perf_mode(args: argparse.Namespace, explicit_dests: set[str]) -> None:
@@ -221,6 +260,7 @@ def _build_runtime(args: argparse.Namespace):
         mp_min_tracking_confidence=args.mp_min_tracking_confidence,
         mp_input_width=args.mp_input_width,
         mp_input_height=args.mp_input_height,
+        min_conf=args.min_conf,
     )
     return video_source, recognizer
 
@@ -435,6 +475,15 @@ def run_edge(args: argparse.Namespace) -> None:
             )
             if prediction is not None:
                 last_prediction = prediction
+                scores = prediction.scores
+                top = " | ".join(
+                    f"{k}:{v:.3f}" for k, v in sorted(scores.items(), key=lambda x: -x[1])
+                )
+                print(
+                    f"[pred] frame={frame_id} → {prediction.action} "
+                    f"({prediction.confidence:.3f}) | {top}",
+                    file=sys.stderr,
+                )
 
             packet = packet_builder.build_packet(
                 frame_id=frame_id,
@@ -482,6 +531,13 @@ def run_edge(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = build_parser()
     argv = sys.argv[1:]
+    bootstrap = argparse.ArgumentParser(add_help=False)
+    bootstrap.add_argument("--runtime-config", default="")
+    bootstrap_args, _ = bootstrap.parse_known_args(argv)
+    if bootstrap_args.runtime_config:
+        parser.set_defaults(
+            **_load_runtime_config(parser, bootstrap_args.runtime_config)
+        )
     args = parser.parse_args(argv)
     _apply_perf_mode(args, _collect_explicit_dests(parser, argv))
     if args.mode == "edge":

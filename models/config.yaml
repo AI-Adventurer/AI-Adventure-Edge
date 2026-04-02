@@ -47,6 +47,7 @@ model_args:
   graph: adventure_game_jetson.inference.graph.mediapipe_pose.Graph
   graph_args:
     labeling_mode: 'spatial'
+  base_channel: 16          # v2: 4x capacity (was 8)
 
 # ======================
 # optim

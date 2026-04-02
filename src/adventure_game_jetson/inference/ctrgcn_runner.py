@@ -49,9 +49,9 @@ class CTRGCNRunner:
         self,
         action_labels: list[str],
         backend: ActionModelBackend,
-        window_size: int = 90,
-        stride: int = 2,
-        smooth_k: int = 5,
+        window_size: int = 30,
+        stride: int = 6,
+        smooth_k: int = 2,
     ) -> None:
         self.action_labels = action_labels
         self.window_size = int(window_size)
@@ -102,14 +102,17 @@ class CTRGCNRunner:
             if 0 <= vote_idx < len(self.action_labels)
             else f"cls_{vote_idx}"
         )
+        # Use the voted class's probability as the score, not the
+        # current argmax — otherwise score doesn't match action.
+        vote_score = float(probs[vote_idx]) if 0 <= vote_idx < len(probs) else score
 
         self.last_action = action
-        self.last_score = score
+        self.last_score = vote_score
 
         return InferenceResult(
             ready=True,
             action=action,
-            score=score,
+            score=vote_score,
             pred_idx=pred_idx,
             vote_idx=vote_idx,
             probabilities=probs.copy(),

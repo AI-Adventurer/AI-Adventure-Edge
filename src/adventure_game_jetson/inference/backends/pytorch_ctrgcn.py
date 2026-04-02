@@ -44,16 +44,32 @@ class PyTorchCTRGCNBackend:
         self.device = torch.device(device)
         self.device_label = str(self.device)
         self.model = load_model_from_config(config_path, weights_path, self.device)
+        # Pre-allocated buffers for zero-malloc inference; lazily sized on first call.
+        self._cuda_input: torch.Tensor | None = None
+        self._pinned_buf: torch.Tensor | None = None
 
     def infer(self, window: np.ndarray) -> np.ndarray:
-        arr = np.asarray(window, dtype=np.float32)
-        arr = arr.transpose(2, 0, 1)
-        arr = arr[None, :, :, :, None]
-        inp = torch.from_numpy(arr).to(self.device)
+        arr = np.ascontiguousarray(
+            np.asarray(window, dtype=np.float32).transpose(2, 0, 1)[None, :, :, :, None]
+        )
+
+        if self.device.type == "cuda":
+            if self._cuda_input is None or self._cuda_input.shape != arr.shape:
+                self._cuda_input = torch.empty(arr.shape, device=self.device, dtype=torch.float32)
+                self._pinned_buf = torch.empty(arr.shape, pin_memory=True, dtype=torch.float32)
+            # Write numpy → pinned host memory (no copy overhead), then async DMA → GPU
+            self._pinned_buf.numpy()[...] = arr
+            self._cuda_input.copy_(self._pinned_buf, non_blocking=True)
+            inp = self._cuda_input
+        else:
+            inp = torch.from_numpy(arr)
+
         with torch.inference_mode():
             logits = self.model(inp)[0].detach().float().cpu().numpy()
         return logits
 
     def close(self) -> None:
+        self._cuda_input = None
+        self._pinned_buf = None
         self.model = None
 

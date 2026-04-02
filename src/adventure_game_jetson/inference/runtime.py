@@ -32,18 +32,19 @@ class ActionRecognizer:
         action_backend: str = "pytorch",
         action_engine: str = "",
         window_size: int = 30,
-        stride: int = 1,
-        smooth_k: int = 5,
-        pose_every_n_frames: int = 1,
+        stride: int = 6,
+        smooth_k: int = 2,
+        pose_every_n_frames: int = 2,
         scale_w: float = 1.0,
         scale_h: float = 1.0,
         centralize: bool = True,
-        interpolate_60fps: bool = True,
+        interpolate_60fps: bool = False,
         mp_model_complexity: int = 1,
         mp_min_detection_confidence: float = 0.5,
         mp_min_tracking_confidence: float = 0.5,
         mp_input_width: int = 0,
         mp_input_height: int = 0,
+        min_conf: float = 0.40,
     ) -> None:
         self.pose_backend = pose_backend.strip().lower()
         self.action_backend = action_backend.strip().lower()
@@ -52,6 +53,7 @@ class ActionRecognizer:
         self.scale_h = float(scale_h)
         self.centralize = bool(centralize)
         self.interpolate_60fps = bool(interpolate_60fps)
+        self.min_conf = float(min_conf)
 
         self.action_labels = ["stand", "jump", "crouch", "push", "run_forward"]
         backend = create_action_backend(
@@ -70,6 +72,7 @@ class ActionRecognizer:
             stride=stride,
             smooth_k=smooth_k,
         )
+        self._warmup_action_backend(window_size=window_size, num_joints=33)
         self.sequence_layout = "mediapipe_pose_33"
         if self.pose_backend != "mediapipe":
             raise ValueError(f"Unsupported pose backend: {pose_backend}")
@@ -88,6 +91,22 @@ class ActionRecognizer:
         self._zero_scores = {label: 0.0 for label in self.action_labels}
         self._last_prediction = ActionPrediction(scores=dict(self._zero_scores))
         self._frame_counter = 0
+        # Motion-based stand override: track raw skeleton to detect stillness.
+        self._prev_raw_skeleton: np.ndarray | None = None
+        self._still_threshold = 0.004  # average per-joint L1 movement on x,y
+        self._is_still = False
+
+    def _warmup_action_backend(self, window_size: int, num_joints: int) -> None:
+        warmup_window = np.zeros(
+            (max(1, int(window_size)), int(num_joints), 3),
+            dtype=np.float32,
+        )
+        try:
+            self.runner.backend.infer(warmup_window)
+        except Exception:
+            # Best effort only: startup should still succeed even if a backend
+            # cannot be prewarmed in the current environment.
+            pass
 
     def reset(self) -> None:
         self.runner.reset()
@@ -97,6 +116,8 @@ class ActionRecognizer:
         self._serialized_pose = np.zeros((33, 3), dtype=np.float32).tolist()
         self._last_prediction = ActionPrediction(scores=dict(self._zero_scores))
         self._frame_counter = 0
+        self._prev_raw_skeleton = None
+        self._is_still = False
 
     def close(self) -> None:
         self.runner.close()
@@ -151,6 +172,7 @@ class ActionRecognizer:
             return None
 
         norm = np.array(skeleton, dtype=np.float32, copy=True)
+        # Clip all coordinates to [0, 1] — matches training preprocessing.
         np.clip(norm, 0.0, 1.0, out=norm)
         norm[:, 0] *= self.scale_w
         norm[:, 1] *= self.scale_h
@@ -167,15 +189,17 @@ class ActionRecognizer:
         return norm
 
     def _run_sequence(self, skeleton: np.ndarray) -> InferenceResult | None:
-        final_res: InferenceResult | None = None
+        ready_res: InferenceResult | None = None
         if self.interpolate_60fps and self._prev_skeleton is not None:
             mid_skeleton = (self._prev_skeleton + skeleton) * 0.5
-            final_res = self.runner.step(mid_skeleton)
-        final_res = self.runner.step(skeleton)
+            res = self.runner.step(mid_skeleton)
+            if res.ready:
+                ready_res = res
+        res = self.runner.step(skeleton)
+        if res.ready:
+            ready_res = res
         self._prev_skeleton = skeleton
-        if final_res.ready:
-            return final_res
-        return None
+        return ready_res
 
     def predict(
         self,
@@ -196,8 +220,14 @@ class ActionRecognizer:
             return None, preprocess_ms, action_ms
 
         ts = float(produced_at) if produced_at is not None else time.time()
+        # Confidence filter: low-confidence predictions default to stand.
+        action = runner_result.action if runner_result.score >= self.min_conf else "stand"
+        # Motion-based stand override: only when model is also uncertain.
+        # Don't override if model is confident about a non-stand action.
+        if self._is_still and runner_result.score < 0.50:
+            action = "stand"
         prediction = ActionPrediction(
-            action=runner_result.action,
+            action=action,
             confidence=float(runner_result.score),
             produced_at=ts,
             scores=self._build_score_map(runner_result.probabilities),
@@ -219,13 +249,19 @@ class ActionRecognizer:
             skeleton = self.pose_extractor.extract(frame_bgr)
             pose_ms = (perf_counter() - pose_started) * 1000.0
             self._last_skeleton = skeleton
+            # Compute skeleton motion (x, y only) for stand override.
+            if self._prev_raw_skeleton is not None and np.any(skeleton):
+                delta = np.abs(skeleton[:, :2] - self._prev_raw_skeleton[:, :2])
+                self._is_still = float(np.mean(delta)) < self._still_threshold
+            else:
+                self._is_still = False
+            if np.any(skeleton):
+                self._prev_raw_skeleton = skeleton.copy()
             prediction, preprocess_ms, action_ms = self.predict(skeleton, produced_at=produced_at)
         else:
             skeleton = self._last_skeleton
             pose_ms = 0.0
-            preprocess_ms = 0.0
-            action_ms = 0.0
-            prediction = None
+            prediction, preprocess_ms, action_ms = self.predict(skeleton, produced_at=produced_at)
 
         self._record_raw_skeleton(skeleton)
 

@@ -238,19 +238,36 @@ python -m adventure_game_jetson.app \
   --edge-output-path /tmp/jetson_edge.jsonl
 ```
 
-### Edge mode: 送到遠端 Socket.IO
+### Edge mode: 用 runtime config 啟動
+
+```bash
+python -m adventure_game_jetson.app \
+  --runtime-config configs/edge-runtime.example.json
+```
+
+範例設定檔在 [configs/edge-runtime.example.json](/home/jetson/workspace/AI_Adventure_Edge/configs/edge-runtime.example.json)。
+
+`runtime config` 目前用 JSON，欄位名稱直接對應 CLI 參數的 `dest`，也就是把 `--edge-sio-url` 寫成 `edge_sio_url`。
+
+如果你想臨時覆蓋 config 內某個值，CLI 還是可以直接加在後面：
+
+```bash
+python -m adventure_game_jetson.app \
+  --runtime-config configs/edge-runtime.example.json \
+  --source-id jetson-nano-02
+```
+
+如果你還是想直接用純 CLI，這組參數對應遠端後端的 `@socketio.on("frame", namespace="/edge/frames")`：
 
 ```bash
 python -m adventure_game_jetson.app \
   --mode edge \
   --source-id jetson-nano-01 \
-  --edge-sio-url http://192.168.50.174:8000 \
+  --edge-sio-url http://192.168.100.166:8000 \
   --edge-sio-namespace /edge/frames \
   --edge-sio-event frame \
   --edge-sio-transports polling,websocket
 ```
-
-這組參數對應遠端後端的 `@socketio.on("frame", namespace="/edge/frames")`。
 
 如果你想直接套用 Jetson 比較平衡的效能設定，也可以改成：
 
@@ -323,19 +340,15 @@ python -m adventure_game_jetson.app \
 python -m adventure_game_jetson.app \
   --mode edge \
   --source-id jetson-nano-01 \
-  --edge-sio-url http://192.168.50.174:8000 \
+  --edge-sio-url http://192.168.100.166:8000 \
   --edge-sio-namespace /edge/frames \
   --edge-sio-event frame \
   --edge-sio-transports polling,websocket \
-  --edge-video-url http://192.168.50.174:8000 \
+  --edge-video-url http://192.168.100.166:8000 \
   --edge-video-namespace /edge/video \
   --edge-video-path socket.io \
   --edge-video-transports polling,websocket \
   --edge-video-offer-event offer \
-  --edge-video-answer-event answer \
-  --edge-video-candidate-event candidate \
-  --edge-video-width 640 \
-  --edge-video-height 360
 ```
 
 重點：
